@@ -1,0 +1,8 @@
+flask
+requests
+pillow
+transformers==4.29.2
+numpy
+googletrans==4.0.0rc1
+sentence-transformers==2.2.2
+
