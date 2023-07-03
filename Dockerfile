@@ -1,15 +1,13 @@
-FROM ubuntu:20.04
+FROM python:3.9
 
-ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
 
-RUN apt-get update
-RUN apt-get install -y python3.9 python3.9-dev python3.9-venv python3-pip
+COPY requirements.txt .
+COPY runserver.sh /app/runserver.sh
 
-ADD app/ /app
-COPY requirements.txt /requirements.txt
-COPY runserver.sh /runserver.sh
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt && pip install gunicorn
 
-RUN python3.9 -m pip install --upgrade pip
-RUN python3.9 -m pip install -r requirements.txt && python3.9 -m pip install gunicorn
+COPY . .
 
-ENTRYPOINT ["/runserver.sh"]
+CMD ["sh", "runserver.sh"]

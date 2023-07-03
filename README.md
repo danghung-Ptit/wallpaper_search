@@ -16,5 +16,5 @@
 ## Completion Status
 - Recommend Image: ***Completed***
 - Recommend User: ***Not Started***
-- AI Search: ***In progress***
-- Classification Wallpaper Categories: ***Not Started***
+- AI Search: ***Completed***
+- Classification Wallpaper Categories: ***In progress***

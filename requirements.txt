@@ -1,4 +1,7 @@
 flask
+fastapi
+fastapi_cache
+cachetools
 requests
 pillow
 transformers==4.29.2

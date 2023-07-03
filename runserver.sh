@@ -1,3 +1,3 @@
 #!/bin/bash
 echo "start gunicorn server"
-gunicorn --workers 1 --name app -b 0.0.0.0:8000 --reload app.run_web_server:app
+gunicorn --workers 4 --name app -b 0.0.0.0:3000 --reload app.main:app
