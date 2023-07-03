@@ -1,3 +1,3 @@
 #!/bin/bash
 echo "start gunicorn server"
-gunicorn --workers 4 --name app -b 0.0.0.0:3000 --reload app.main:app
+exec uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload
