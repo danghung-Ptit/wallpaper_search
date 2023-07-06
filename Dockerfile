@@ -11,4 +11,3 @@ RUN pip install -r requirements.txt && pip install uvicorn
 COPY . .
 
 CMD ["sh", "runserver.sh"]
-
