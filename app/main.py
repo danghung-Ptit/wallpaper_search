@@ -11,9 +11,13 @@ from googletrans import Translator
 import requests
 import pickle
 import numpy as np
+from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 app = FastAPI()
-cache = TTLCache(maxsize=5000, ttl=600)
+bearer_scheme = HTTPBearer()
+cache = TTLCache(maxsize=1000, ttl=300)  # Cache sử dụng TTL (time-to-live) là 300 giây (5 phút)
 translator = Translator()
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -21,6 +25,7 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
 emb_path = "app/wallpaper_indexing/wallpaper-embeddings.pkl"
+
 
 with open(emb_path, "rb") as fIn:
     img_names, img_emb = pickle.load(fIn)
@@ -43,14 +48,48 @@ async def app_startup():
 async def app_shutdown():
     await shutdown()
 
+users = [
+    {"username": "admin", "password": "ecowallpaper"},
+    {"username": "user1", "password": "ecowallpaper1"},
+    {"username": "user2", "password": "ecowallpaper2"},
+]
+
+def authenticate(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    try:
+        token = credentials.credentials  # Lấy token từ header Authorization
+
+        for user in users:
+            if token == user["password"]:
+                return {"username": user["username"]}
+
+        raise Exception("Invalid token")
+    except Exception as e:
+
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
 
 
-@app.get("/openapi.json")
-async def get_open_api_endpoint():
-    return get_openapi(title="API Document", version="1.0.0", routes=app.routes)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(authenticate)])
+def homepage():
+    """
+    Endpoint for homepage
+    """
+    return """
+    <pre>
+    <h1>Welcome to the Recommend Wallpaper V2 REST API!</h1>
+    <p>This API provides endpoints for searching and recommending wallpapers.</p>
+    <p>Available Endpoints:</p>
+    <ul>
+        <li>/search?text={search_text}&page={page}&per_page={per_page} [GET] - Search wallpapers by text</li>
+        <li>/search/image?page={page}&per_page={per_page} [POST] - Search wallpapers by image</li>
+        <li>/recommend?thumbnail_storage_file_name={thumbnail_storage_file_name}&page={page}&per_page={per_page} [GET] - Recommend wallpapers based on an image</li>
+        <li>/add_wallpaper?thumbnail_storage_file_name={thumbnail_storage_file_name} [GET] - Add a new wallpaper</li>
+    </ul>
+    </pre>
+    """
 
 
-@app.get("/add_wallpaper")
+
+@app.get("/add_wallpaper", dependencies=[Depends(authenticate)])
 async def add_new_wallpaper(thumbnail_storage_file_name: str):
     global img_names, img_emb
     data = {"success": False}
@@ -90,9 +129,9 @@ async def add_new_wallpaper(thumbnail_storage_file_name: str):
 
     return data
 
-@app.get("/search")
+@app.get("/search", dependencies=[Depends(authenticate)])
 @cached(cache)
-def search_text(text: str, num_results: int = 200):
+def search_text(text: str, page: int = 1, per_page: int = 10):
     data = {"success": False}
 
     translated_query = translator.translate(text=text, dest='en').text
@@ -100,7 +139,11 @@ def search_text(text: str, num_results: int = 200):
     inputs = tokenizer([translated_query], padding=True, return_tensors="pt")
     query_emb = model.get_text_features(**inputs)
 
-    hits = util.semantic_search(query_emb, img_emb, top_k=num_results)[0]
+    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+
+    start_idx = (page - 1) * per_page
+    end_idx = page * per_page
+    hits = all_hits[start_idx:end_idx]
 
     images = [
         {
@@ -117,8 +160,8 @@ def search_text(text: str, num_results: int = 200):
     return data
 
 
-@app.post("/search/image")
-def search_image(num_results: int = 200, image: UploadFile = File(...)):
+@app.post("/search/image", dependencies=[Depends(authenticate)])
+def search_image(page: int = 1, per_page: int = 10, image: UploadFile = File(...)):
     data = {"success": False}
     image = Image.open(image.file)
 
@@ -130,7 +173,11 @@ def search_image(num_results: int = 200, image: UploadFile = File(...)):
 
     query_emb = model.get_image_features(images)
 
-    hits = util.semantic_search(query_emb, img_emb, top_k=num_results)[0]
+    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+
+    start_idx = (page - 1) * per_page
+    end_idx = page * per_page
+    hits = all_hits[start_idx:end_idx]
 
     images = [
         {
@@ -148,10 +195,11 @@ def search_image(num_results: int = 200, image: UploadFile = File(...)):
     return data
 
 
-@app.get("/recommend")
-def recommend_images(thumbnail_storage_file_name: str, num_results: int = 200):
+@app.get("/recommend", dependencies=[Depends(authenticate)])
+def recommend_images(thumbnail_storage_file_name: str, page: int = 1, per_page: int = 10):
     global img_names, img_emb
     data = {"success": False}
+
     if thumbnail_storage_file_name in img_names:
         idx = img_names.index(thumbnail_storage_file_name)
         query_emb = img_emb[idx]
@@ -186,7 +234,11 @@ def recommend_images(thumbnail_storage_file_name: str, num_results: int = 200):
         idx = img_names.index(thumbnail_storage_file_name)
         query_emb = img_emb[idx]
 
-    hits = util.semantic_search(query_emb, img_emb, top_k=num_results)[0]
+    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+
+    start_idx = (page - 1) * per_page
+    end_idx = page * per_page
+    hits = all_hits[start_idx:end_idx]
 
     images = [
         {
