@@ -1,5 +1,5 @@
 from fastapi.openapi.utils import get_openapi
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi import Depends, FastAPI
 from fastapi_cache import caches, close_caches
 from cachetools import cached, TTLCache
@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import torch
+from typing import List, Tuple, Optional, Union
 
 app = FastAPI()
 bearer_scheme = HTTPBearer()
@@ -83,7 +84,7 @@ def homepage():
 
 
 @app.post("/add_wallpaper", dependencies=[Depends(authenticate)])
-async def add_new_wallpaper(thumbnail_storage_file_name: str, content_type: str):
+async def add_new_wallpaper(thumbnail_storage_file_name: str = Form(...), content_type: str = Form(...)):
     global img_names, img_emb
     data = {"success": False}
 
