@@ -124,8 +124,12 @@ async def add_new_wallpaper(thumbnail_storage_file_name: str = Form(...), conten
     return data
 
 @app.get("/search", dependencies=[Depends(authenticate)])
-@cached(cache)
-def search_text(text: str, content_type: str, page: int = 1, per_page: int = 10):
+def search_text(
+    text: str,
+    content_type: List[str] = Query(..., description="List of content types"),
+    page: int = Query(1, description="Page number"),
+    per_page: int = Query(10, description="Items per page")
+):
     data = {"success": False}
 
     translated_query = translator.translate(text=text, dest='en').text
@@ -133,17 +137,14 @@ def search_text(text: str, content_type: str, page: int = 1, per_page: int = 10)
     inputs = tokenizer([translated_query], padding=True, return_tensors="pt")
     query_emb = model.get_text_features(**inputs)
 
-    if content_type == "all":
-        result_img_emb = img_emb
-        result_img_names = img_names
-    else:
-        indexes = []
-        for i, item in enumerate(img_names):
-            if item[1] == content_type:
-                indexes.append(i)
+    indexes = []
 
-        result_img_emb = [img_emb[i] for i in indexes]
-        result_img_names = [img_names[i] for i in indexes]
+    for i, item in enumerate(img_names):
+        if item[1] in content_type:
+            indexes.append(i)
+
+    result_img_emb = [img_emb[i] for i in indexes]
+    result_img_names = [img_names[i] for i in indexes]
 
     corpus_embeddings = [torch.from_numpy(arr) for arr in result_img_emb]
     corpus_embeddings = torch.stack(corpus_embeddings)
@@ -171,7 +172,7 @@ def search_text(text: str, content_type: str, page: int = 1, per_page: int = 10)
 
 
 @app.post("/search/image", dependencies=[Depends(authenticate)])
-def search_image(content_type: str, page: int = 1, per_page: int = 10, image: UploadFile = File(...)):
+def search_image(content_type: List[str] = Query(..., description="List of content types"), page: int = 1, per_page: int = 10, image: UploadFile = File(...)):
     data = {"success": False}
     image = Image.open(image.file)
 
@@ -183,17 +184,16 @@ def search_image(content_type: str, page: int = 1, per_page: int = 10, image: Up
 
     query_emb = model.get_image_features(images)
 
-    if content_type == "all":
-        result = img_emb
-    else:
-        indexes = []
-        for i, item in enumerate(img_names):
-            if item[1] == content_type:
-                indexes.append(i)
+    indexes = []
 
-        result = [img_emb[i] for i in indexes]
+    for i, item in enumerate(img_names):
+        if item[1] in content_type:
+            indexes.append(i)
 
-    corpus_embeddings = [torch.from_numpy(arr) for arr in result]
+    result_img_emb = [img_emb[i] for i in indexes]
+    result_img_names = [img_names[i] for i in indexes]
+
+    corpus_embeddings = [torch.from_numpy(arr) for arr in result_img_emb]
     corpus_embeddings = torch.stack(corpus_embeddings)
 
     all_hits = util.semantic_search(query_emb, corpus_embeddings, top_k=per_page * page)[0]
@@ -204,9 +204,9 @@ def search_image(content_type: str, page: int = 1, per_page: int = 10, image: Up
 
     images = [
         {
-            "thumbnail_storage_file_name": img_names[hit["corpus_id"]][0],
-            "content_type": img_names[hit["corpus_id"]][1],
-            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']][0]}",
+            "thumbnail_storage_file_name": result_img_names[hit["corpus_id"]][0],
+            "content_type": result_img_names[hit["corpus_id"]][1],
+            "paths": f"https://wallpapernew.net/api/static/images/storage/{result_img_names[hit['corpus_id']][0]}",
             "score": f"{hit['score'] * 100:.2f}%",
         }
         for hit in hits
