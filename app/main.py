@@ -14,10 +14,11 @@ import numpy as np
 from fastapi.responses import HTMLResponse
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import torch
 
 app = FastAPI()
 bearer_scheme = HTTPBearer()
-cache = TTLCache(maxsize=1000, ttl=300)  # Cache sử dụng TTL (time-to-live) là 300 giây (5 phút)
+cache = TTLCache(maxsize=10000, ttl=3600)
 translator = Translator()
 
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -49,9 +50,8 @@ async def app_shutdown():
     await shutdown()
 
 users = [
-    {"username": "admin", "password": "ecowallpaper"},
-    {"username": "user1", "password": "ecowallpaper1"},
-    {"username": "user2", "password": "ecowallpaper2"},
+    {"username": "admin", "password": "849e0bb303d44818bcf8cea4f4a9fd6cfb26a1ee3b8cbf7e73f1500a666f66d29cc4560c020b20460889b0a9c236b49e1ebf14910b858567278f44eff16eba03"},
+    {"username": "user2", "password": "ecowallpaper111"},
 ]
 
 def authenticate(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
@@ -77,24 +77,17 @@ def homepage():
     <pre>
     <h1>Welcome to the Recommend Wallpaper V2 REST API!</h1>
     <p>This API provides endpoints for searching and recommending wallpapers.</p>
-    <p>Available Endpoints:</p>
-    <ul>
-        <li>/search?text={search_text}&page={page}&per_page={per_page} [GET] - Search wallpapers by text</li>
-        <li>/search/image?page={page}&per_page={per_page} [POST] - Search wallpapers by image</li>
-        <li>/recommend?thumbnail_storage_file_name={thumbnail_storage_file_name}&page={page}&per_page={per_page} [GET] - Recommend wallpapers based on an image</li>
-        <li>/add_wallpaper?thumbnail_storage_file_name={thumbnail_storage_file_name} [GET] - Add a new wallpaper</li>
-    </ul>
     </pre>
     """
 
 
 
-@app.get("/add_wallpaper", dependencies=[Depends(authenticate)])
-async def add_new_wallpaper(thumbnail_storage_file_name: str):
+@app.post("/add_wallpaper", dependencies=[Depends(authenticate)])
+async def add_new_wallpaper(thumbnail_storage_file_name: str, content_type: str):
     global img_names, img_emb
     data = {"success": False}
 
-    if thumbnail_storage_file_name in img_names:
+    if thumbnail_storage_file_name in [i[0] for i in img_names]:
         data["message"] = "wallpaper already exists!"
         return data
     try:
@@ -114,7 +107,7 @@ async def add_new_wallpaper(thumbnail_storage_file_name: str):
     query_emb = model.get_image_features(images)
     batch_emb = query_emb.squeeze(0).cpu().detach().numpy()
 
-    img_names.append(thumbnail_storage_file_name)
+    img_names.append((thumbnail_storage_file_name, content_type))
     img_emb_new = np.vstack((img_emb, batch_emb))
 
     with open(emb_path, "wb") as fOut:
@@ -131,7 +124,7 @@ async def add_new_wallpaper(thumbnail_storage_file_name: str):
 
 @app.get("/search", dependencies=[Depends(authenticate)])
 @cached(cache)
-def search_text(text: str, page: int = 1, per_page: int = 10):
+def search_text(text: str, content_type: str, page: int = 1, per_page: int = 10):
     data = {"success": False}
 
     translated_query = translator.translate(text=text, dest='en').text
@@ -139,7 +132,22 @@ def search_text(text: str, page: int = 1, per_page: int = 10):
     inputs = tokenizer([translated_query], padding=True, return_tensors="pt")
     query_emb = model.get_text_features(**inputs)
 
-    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+    if content_type == "all":
+        result_img_emb = img_emb
+        result_img_names = img_names
+    else:
+        indexes = []
+        for i, item in enumerate(img_names):
+            if item[1] == content_type:
+                indexes.append(i)
+
+        result_img_emb = [img_emb[i] for i in indexes]
+        result_img_names = [img_names[i] for i in indexes]
+
+    corpus_embeddings = [torch.from_numpy(arr) for arr in result_img_emb]
+    corpus_embeddings = torch.stack(corpus_embeddings)
+
+    all_hits = util.semantic_search(query_emb, corpus_embeddings, top_k=per_page * page)[0]
 
     start_idx = (page - 1) * per_page
     end_idx = page * per_page
@@ -147,11 +155,12 @@ def search_text(text: str, page: int = 1, per_page: int = 10):
 
     images = [
         {
-            "thumbnail_storage_file_name": img_names[hit["corpus_id"]],
-            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']]}",
+            "thumbnail_storage_file_name": result_img_names[hit["corpus_id"]][0],
+            "content_type": result_img_names[hit["corpus_id"]][1],
+            "paths": f"https://wallpapernew.net/api/static/images/storage/{result_img_names[hit['corpus_id']][0]}",
             "score": f"{hit['score'] * 100:.2f}%",
         }
-        for hit in hits
+        for hit in hits if hit['score'] * 100 > 25.1
     ]
     data["success"] = True
     data["text_search"] = text
@@ -161,7 +170,7 @@ def search_text(text: str, page: int = 1, per_page: int = 10):
 
 
 @app.post("/search/image", dependencies=[Depends(authenticate)])
-def search_image(page: int = 1, per_page: int = 10, image: UploadFile = File(...)):
+def search_image(content_type: str, page: int = 1, per_page: int = 10, image: UploadFile = File(...)):
     data = {"success": False}
     image = Image.open(image.file)
 
@@ -173,7 +182,20 @@ def search_image(page: int = 1, per_page: int = 10, image: UploadFile = File(...
 
     query_emb = model.get_image_features(images)
 
-    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+    if content_type == "all":
+        result = img_emb
+    else:
+        indexes = []
+        for i, item in enumerate(img_names):
+            if item[1] == content_type:
+                indexes.append(i)
+
+        result = [img_emb[i] for i in indexes]
+
+    corpus_embeddings = [torch.from_numpy(arr) for arr in result]
+    corpus_embeddings = torch.stack(corpus_embeddings)
+
+    all_hits = util.semantic_search(query_emb, corpus_embeddings, top_k=per_page * page)[0]
 
     start_idx = (page - 1) * per_page
     end_idx = page * per_page
@@ -181,14 +203,13 @@ def search_image(page: int = 1, per_page: int = 10, image: UploadFile = File(...
 
     images = [
         {
-            "image_name": img_names[hit["corpus_id"]],
-            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']]}",
+            "thumbnail_storage_file_name": img_names[hit["corpus_id"]][0],
+            "content_type": img_names[hit["corpus_id"]][1],
+            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']][0]}",
             "score": f"{hit['score'] * 100:.2f}%",
-            "id": hit["corpus_id"]
         }
         for hit in hits
     ]
-
     data["success"] = True
     data["data"] = images
 
@@ -196,12 +217,12 @@ def search_image(page: int = 1, per_page: int = 10, image: UploadFile = File(...
 
 
 @app.get("/recommend", dependencies=[Depends(authenticate)])
-def recommend_images(thumbnail_storage_file_name: str, page: int = 1, per_page: int = 10):
+def recommend_images(thumbnail_storage_file_name: str, content_type: str = "single_image", page: int = 1, per_page: int = 10):
     global img_names, img_emb
     data = {"success": False}
 
-    if thumbnail_storage_file_name in img_names:
-        idx = img_names.index(thumbnail_storage_file_name)
+    if thumbnail_storage_file_name in [i[0] for i in img_names]:
+        idx = [i[0] for i in img_names].index(thumbnail_storage_file_name)
         query_emb = img_emb[idx]
     else:
         data["message"] = "Image not learned!"
@@ -221,8 +242,7 @@ def recommend_images(thumbnail_storage_file_name: str, page: int = 1, per_page: 
 
         query_emb = model.get_image_features(images)
         batch_emb = query_emb.squeeze(0).cpu().detach().numpy()
-
-        img_names.append(thumbnail_storage_file_name)
+        img_names.append((thumbnail_storage_file_name, content_type))
         img_emb_new = np.vstack((img_emb, batch_emb))
 
         with open(emb_path, "wb") as fOut:
@@ -234,7 +254,10 @@ def recommend_images(thumbnail_storage_file_name: str, page: int = 1, per_page: 
         idx = img_names.index(thumbnail_storage_file_name)
         query_emb = img_emb[idx]
 
-    all_hits = util.semantic_search(query_emb, img_emb, top_k=per_page * page)[0]
+    corpus_embeddings = [torch.from_numpy(arr) for arr in img_emb]
+    corpus_embeddings = torch.stack(corpus_embeddings)
+
+    all_hits = util.semantic_search(query_emb, corpus_embeddings, top_k=per_page * page)[0]
 
     start_idx = (page - 1) * per_page
     end_idx = page * per_page
@@ -242,12 +265,12 @@ def recommend_images(thumbnail_storage_file_name: str, page: int = 1, per_page: 
 
     images = [
         {
-            "image_name": img_names[hit["corpus_id"]],
-            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']]}",
-            "score": f"{hit['score'] * 100:.2f}%",
-            "id": hit["corpus_id"]
+            "image_name": img_names[hit["corpus_id"]][0],
+            "content_type": img_names[hit["corpus_id"]][1],
+            "paths": f"https://wallpapernew.net/api/static/images/storage/{img_names[hit['corpus_id']][0]}",
+            "score": f"{hit['score'] * 100:.2f}%"
         }
-        for hit in hits
+        for hit in hits if img_names[hit["corpus_id"]][0] != thumbnail_storage_file_name
     ]
 
     data["success"] = True
