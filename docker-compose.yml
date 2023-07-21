@@ -6,3 +6,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    volumes:
+      - wallpaper_data:/app/wallpaper_indexing
+
+volumes:
+  wallpaper_data:
+
